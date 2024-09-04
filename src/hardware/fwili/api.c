@@ -32,6 +32,7 @@ static const uint32_t drvopts[] = {
 };
 
 static const uint32_t devopts[] = {
+  SR_CONF_RLE,
 	SR_CONF_CONTINUOUS,
   SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
   SR_CONF_SAMPLERATE | SR_CONF_GET | SR_CONF_SET | SR_CONF_LIST,
@@ -57,7 +58,18 @@ static const char *group_names[] = {
 };
 
 static const char *channel_names[] = {
-	"4", "3", "2", "1"
+  "GPIO_27",
+  "GPIO_26",
+  "I2C_SCL",
+  "I2C_SDA",
+  "UART_RTS",
+  "UART_CTS",
+  "UART_RX",
+  "UART_TX",
+  "SPI_CS#",
+  "SPI_CLK",
+  "SPI_MOSI",
+  "SPI_MISO"
 };
 
 /* TODO add FPGA functionality for more samplerates */
@@ -107,7 +119,7 @@ static void scan_device(struct ftdi_context *ftdic,
 
 	/* Allocate memory for the incoming data. */
 	devc->raw_data_buf = g_malloc0(RAW_DATA_BUF_SIZE);
-  devc->decoded_data_buf = g_malloc0(RAW_DATA_BUF_SIZE * RLE_SIZE);
+  devc->decoded_data_buf = g_malloc0(RAW_DATA_BUF_SIZE * RLE_SIZE ); // 12 channels
 
 	vendor = g_malloc(usb_str_maxlen);
 	model = g_malloc(usb_str_maxlen);
@@ -454,6 +466,7 @@ static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 		if (devc->limit_samples > 0)
 			pre_trigger_samples = (devc->capture_ratio * devc->limit_samples) / 100;
 		devc->stl = soft_trigger_logic_new(sdi, trigger, pre_trigger_samples);
+    devc->stl->unitsize = 2;
 		if (!devc->stl)
 			return SR_ERR_MALLOC;
 		devc->trigger_fired = FALSE;

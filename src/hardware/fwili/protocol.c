@@ -39,14 +39,14 @@ static void send_samples(struct sr_dev_inst *sdi, uint64_t samples_to_send, uint
 	packet.type = SR_DF_LOGIC;
 	packet.payload = &logic;
 	logic.length = samples_to_send;
-	logic.unitsize = 1;
+	logic.unitsize = 2;
 	logic.data = devc->decoded_data_buf + offset;
   sr_dbg("Sending packet");
 	sr_session_send(sdi, &packet);
   sr_dbg("Done sending packet");
 
 	devc->samples_sent += samples_to_send;
-	devc->bytes_received -= samples_to_send;
+	devc->bytes_received -= (samples_to_send << 1);
 }
 
 SR_PRIV int fwili_receive_data(int fd, int revents, void *cb_data)
@@ -58,7 +58,8 @@ SR_PRIV int fwili_receive_data(int fd, int revents, void *cb_data)
 	uint64_t n;
   int i, j;
   uint8_t cur_byte_size;
-  uint8_t cur_byte;
+  uint8_t cur_byte_upper;
+  uint8_t cur_byte_lower;
   int trigger_offset;
   int pre_trigger_samples;
 
@@ -88,21 +89,25 @@ SR_PRIV int fwili_receive_data(int fd, int revents, void *cb_data)
 	}
 	sr_spew("Got some data.");
 
-  /* Decode the incoming data */
+  /* Decode the incoming data for 12 channels*/
   decoded_bytes_read = 0;
-  for (i = 0; i < raw_bytes_read; i++) {
-    cur_byte_size = devc->raw_data_buf[i] & 0b00001111;
-    cur_byte = devc->raw_data_buf[i] >> 4;
-    for (j = 0; j < cur_byte_size; j++) {
-      devc->decoded_data_buf[decoded_bytes_read] = cur_byte;
-      decoded_bytes_read++;
+  sr_dbg("----- new chunk ------");
+  for (i = 0; i < raw_bytes_read; i += 2) {
+    cur_byte_size = devc->raw_data_buf[i+1] & 0b00001111;
+    cur_byte_lower = (devc->raw_data_buf[i] << 4) | (devc->raw_data_buf[i+1] >> 4);
+    cur_byte_upper = devc->raw_data_buf[i] >> 4;
+    for (j = 0; j <= cur_byte_size; j++) {
+      devc->decoded_data_buf[decoded_bytes_read] = cur_byte_lower;
+      devc->decoded_data_buf[decoded_bytes_read + 1] = cur_byte_upper;
+      decoded_bytes_read += 2;
     }
   }
 
-
+  /* Send the data */
+  
   if (devc->trigger_fired) {
     devc->bytes_received += decoded_bytes_read;
-    n = devc->samples_sent + devc->bytes_received;
+    n = devc->samples_sent + (devc->bytes_received >> 1);
     if (devc->limit_samples && (n > devc->limit_samples)) {
       send_samples(sdi, devc->limit_samples - devc->samples_sent, 0);
       sr_info("Requested number of samples reached.");
@@ -110,21 +115,21 @@ SR_PRIV int fwili_receive_data(int fd, int revents, void *cb_data)
       sr_dev_acquisition_stop(sdi);
       return TRUE;
     } else {
-      send_samples(sdi, devc->bytes_received, 0);
+      send_samples(sdi, (devc->bytes_received >> 1), 0);
     }
   } else {
     sr_dbg("Trigger not fired!");
     trigger_offset = soft_trigger_logic_check(devc->stl,
 				devc->decoded_data_buf, decoded_bytes_read, &pre_trigger_samples);
     if (trigger_offset > -1) {
-      devc->bytes_received = decoded_bytes_read - trigger_offset;
-      if (devc->limit_samples && devc->bytes_received > devc->limit_samples ) {
-        devc->bytes_received = devc->limit_samples;
-        send_samples(sdi, devc->bytes_received, trigger_offset);
+      devc->bytes_received = decoded_bytes_read - (trigger_offset << 1);
+      if (devc->limit_samples && (devc->bytes_received >> 1) > devc->limit_samples ) {
+        devc->bytes_received = (devc->limit_samples << 1);
+        send_samples(sdi, devc->bytes_received >> 1, trigger_offset << 1);
         sr_info("Requested number of samples reached.");
         sr_dev_acquisition_stop(sdi);
       } else {
-        send_samples(sdi, devc->bytes_received, trigger_offset);
+        send_samples(sdi, (devc->bytes_received >> 1), trigger_offset << 1);
       }
       devc->trigger_fired = TRUE;
     }
